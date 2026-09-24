@@ -288,3 +288,28 @@ def phase_to_density(
     density = np.maximum(density, 0)
 
     return density, x_mm, y_mm
+
+
+def plot_density_map(density_map, x_mm, y_mm, title="Density Map", vmax_percentile=98.0):
+    """Utility to cleanly plot the final density map."""
+    plt.figure(figsize=(8, 6), constrained_layout=True)
+
+    m = np.nanpercentile(np.abs(density_map), vmax_percentile)
+    m = max(float(m), 1e-30)
+
+    extent = [x_mm[0], x_mm[-1], y_mm[0], y_mm[-1]]
+    im = plt.imshow(
+        density_map,
+        origin="lower",
+        extent=extent,
+        aspect="auto",
+        cmap="viridis",
+        vmin=0.0,
+        vmax=m,
+    )
+
+    plt.title(title, fontsize=14)
+    plt.xlabel("x [mm]", fontsize=12)
+    plt.ylabel("Height above nozzle [mm]", fontsize=12)
+    plt.colorbar(im, label="Density [cm$^{-3}$]")
+    plt.show()
