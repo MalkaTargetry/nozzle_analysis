@@ -42,7 +42,7 @@ def get_fourier(img_roi):
     img_fourier_shifted = np.fft.fftshift(img_fourier)
     return img_fourier_shifted
 
-def get_dominant_frequency(img_fourier_shifted, debug = False):
+def get_dominant_frequency(img_fourier_shifted, debug = False, min_dc_distance = 15):
     """
     to be used on ref ROI
     """
@@ -50,6 +50,13 @@ def get_dominant_frequency(img_fourier_shifted, debug = False):
 
     # plot the middle column of ref_magnitude_spectrum
     magnitude_spectrum = np.abs(img_fourier_shifted)
+    rows, cols = magnitude_spectrum.shape
+    crow, ccol = rows // 2, cols // 2
+
+    # Zero out DC and low-frequency region around the center
+    y, x = np.ogrid[:rows, :cols]
+    dc_mask = (y - crow) ** 2 + (x - ccol) ** 2 < min_dc_distance ** 2
+    magnitude_spectrum[dc_mask] = 0
     flat_indices = np.argpartition(magnitude_spectrum.flatten(), -2)[-2:]
     peak_indices = np.array(np.unravel_index(flat_indices, magnitude_spectrum.shape)).T
     dominant_frequency = peak_indices[np.argmin(peak_indices[:, 0])]
@@ -99,7 +106,7 @@ def demodulate_image(filtered_fourier, dominant_frequency):
     return demodulated_image
 
 def get_delta_phase_wrapped (ref_fourier_shifted, exp_fourier_shifted, dominant_frequency, debug = False):
-    dominant_frequency_mask = create_gaussian_cut_mask(ref_fourier_shifted.shape, dominant_frequency, radius = 15)
+    dominant_frequency_mask = create_gaussian_cut_mask(ref_fourier_shifted.shape, dominant_frequency, radius = 20)
     ref_filtered_fourier = ref_fourier_shifted * dominant_frequency_mask
     exp_filtered_fourier = exp_fourier_shifted * dominant_frequency_mask
     ref_demodulated = demodulate_image(ref_filtered_fourier, dominant_frequency)

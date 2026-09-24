@@ -62,7 +62,7 @@ def estimate_nozzle_edge(img, center_frac=(0.35, 0.7)):
 
 def detect_nozzle_x_range(img, nozzle_edge_y: int,
         center_frac: Tuple[float, float] = (0.35, 0.7),
-        edge_margin_px: int = 40,
+        edge_margin_px: int = 0,
         thresh_frac: float = 2.5,
         debug: bool = False,
 ) -> Tuple[Optional[int], Optional[int]]:
@@ -130,6 +130,37 @@ def detect_nozzle_x_range(img, nozzle_edge_y: int,
                 x_right = x_right_candidate - edge_margin_px
         if x_left is not None and x_right is not None:
             break
+
+    if debug:
+        fig, ax = plt.subplots(2, 1, figsize=(10, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+
+        # Panel 1: Image ROI with Edge & X-Range
+        ax[0].imshow(img, cmap='gray', aspect='auto')
+        ax[0].axhline(nozzle_edge_y, color='red', linestyle='--', linewidth=1.5,
+                      label=f'Nozzle Edge (y={nozzle_edge_y})')
+        if x_left is not None:
+            ax[0].axvline(x_left, color='cyan', linestyle='--', linewidth=1.5, label=f'x_left ({x_left}px)')
+        if x_right is not None:
+            ax[0].axvline(x_right, color='magenta', linestyle='--', linewidth=1.5,
+                          label=f'x_right ({x_right}px)')
+        ax[0].set_title('ROI Image with Nozzle Edge and X Range Detection')
+        ax[0].set_ylabel('y [px]')
+        ax[0].legend(loc='upper right')
+
+        # Panel 2: 1D Fringe Energy Profile & Threshold
+        ax[1].plot(profile, color='blue', label='Fringe Energy Profile')
+        ax[1].axhline(threshold, color='red', linestyle=':', label=f'Threshold ({threshold:.2f})')
+        if x_left is not None:
+            ax[1].axvline(x_left, color='cyan', linestyle='--')
+        if x_right is not None:
+            ax[1].axvline(x_right, color='magenta', linestyle='--')
+        ax[1].set_xlabel('x [px]')
+        ax[1].set_ylabel('Fringe Energy')
+        ax[1].legend(loc='upper right')
+        ax[1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
 
     return x_left, x_right
 
