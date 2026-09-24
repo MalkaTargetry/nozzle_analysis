@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import utilities.reading_hdf5 as reading_hdf5
+import src.reading_hdf5 as reading_hdf5
 
 class DataAnalysis:
 

@@ -10,7 +10,6 @@ import os
 from datetime import datetime
 import json
 
-from config import PRINT_REPLIES
 from data_analysis import start_analysis
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Sequence, Any, Union

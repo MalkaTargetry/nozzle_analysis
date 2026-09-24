@@ -4,7 +4,7 @@ import pickle
 import matplotlib.pyplot as plt
 import cv2
 from numpy.array_api import uint8
-
+import config
 
 class HDF5Wrapper:
 
@@ -207,24 +207,6 @@ class HDF5Wrapper:
 
         return image
 
-    def save_image(self, camera_name, file_name, folder_path = None):
-        """Saves the image from the specified camera to a PNG file."""
-        image = self.get_image(camera_name)
-
-        # default folder path
-        if folder_path is None:
-            folder_path = 'C:/Users/vmlab/Documents/data/images/'
-        file_path = folder_path + file_name + '.png'
-        if len(image.shape) == 2:
-            plt.imsave(str(file_path), image, cmap='gray', vmin=0, vmax=image.max())
-            # cv2.imwrite(file_path, image)
-            print(f'Image from camera "{camera_name}" saved to {file_path}')
-        elif len(image.shape) == 1 and image.size > 1:
-            side_length = int(np.sqrt(image.size))
-            if side_length * side_length == image.size:
-                image = image.reshape((side_length, side_length))
-                cv2.imwrite(file_path, image)
-                print(f'Image from camera "{camera_name}" saved to {file_path}')
 
     def __getattr__(self, item):
 
