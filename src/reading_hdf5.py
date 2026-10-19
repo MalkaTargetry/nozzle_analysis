@@ -3,7 +3,7 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 import cv2
-from numpy.array_api import uint8
+from numpy import uint8
 import config
 
 class HDF5Wrapper:

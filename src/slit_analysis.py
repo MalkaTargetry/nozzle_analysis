@@ -36,14 +36,14 @@ def crop_and_format_phase_map(calibrated_phase: np.ndarray, nozzle_edge_y: int, 
 def estimate_depth_profile(
         phi_cropped: np.ndarray,
         px_to_mm: float,
-        nozzle_opening: float,  # <--- NEW: Physical width of the nozzle
+        nozzle_opening: float,  # Physical width of the nozzle opening
         use_abs: bool = False,
         smooth_win_px: int = 9,
         min_peak_abs: float = 0.0,
         bg_frac: float = 0.10,
         exclude_y_mm: float = 0.4,
-        fit_type: str = "quadratic_constrained",
-        # Options: "quadratic_constrained", "linear_constrained", "unconstrained"
+        fit_type: str = "log_constrained",
+        # Options: "log_constrained", "power_constrained", "quadratic_constrained", "linear_constrained"
         debug_y_mm: Optional[float] = None,
         debug_row_idx: Optional[int] = None,
         debug_title: Optional[str] = None,
@@ -54,7 +54,7 @@ def estimate_depth_profile(
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """
     Compute an effective 'depth' profile d(y) from a properly cropped/flipped phase map.
-    Anchors the depth at y=0 to the physical nozzle_width_mm to prevent negative depths.
+    Anchors the depth at y=0 to the physical nozzle_opening to prevent negative depths.
     """
     sig = np.abs(phi_cropped) if use_abs else phi_cropped
     h, w = sig.shape
@@ -177,7 +177,7 @@ def estimate_depth_profile(
                 depth_mm[i] = (r - l + 1) * px_to_mm
 
     # =========================================================================
-    # NEW: CONSTRAINED FIT ANCHORED AT NOZZLE WIDTH
+    # NEW: CONSTRAINED FITTING MODELS
     # =========================================================================
     valid_mask = np.isfinite(depth_mm) & (depth_mm > 0) & (y_mm > exclude_y_mm)
 
@@ -188,39 +188,80 @@ def estimate_depth_profile(
     y_fit = y_mm[valid_mask]
     d_fit = depth_mm[valid_mask]
 
+    depth_fit = None
+    fit_label = ""
+
+    if fit_type == "log_constrained":
+        # Fits: depth = a * ln(1 + b * y) + nozzle_opening
+        def model(y, a, b):
+            return a * np.log1p(b * y) + nozzle_opening
+
+        try:
+            # Force a and b to be positive so the log behaves correctly and expansion only grows
+            coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[1.0, 1.0], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
+            depth_fit = model(y_mm, *coeffs)
+            fit_label = f"Log fit (anchored at {nozzle_opening}mm)"
+        except Exception as e:
+            print(f"Log fit failed ({e}), falling back to quadratic.")
+            fit_type = "quadratic_constrained"
+
+    if fit_type == "power_constrained":
+        # Fits: depth = a * y^b + nozzle_opening
+        def model(y, a, b):
+            return a * (y ** b) + nozzle_opening
+
+        try:
+            # Force positive expansion
+            coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[1.0, 0.5], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
+            depth_fit = model(y_mm, *coeffs)
+            fit_label = f"Power fit (anchored at {nozzle_opening}mm)"
+        except Exception as e:
+            print(f"Power fit failed ({e}), falling back to quadratic.")
+            fit_type = "quadratic_constrained"
+
     if fit_type == "quadratic_constrained":
-        # Fits a curve but forces the depth at y=0 to be exactly nozzle_width_mm
+        # Fits: depth = a * y^2 + b * y + nozzle_opening
         def model(y, a, b):
             return a * (y ** 2) + b * y + nozzle_opening
 
         try:
-            coeffs, _ = curve_fit(model, y_fit, d_fit)
+            # Force coefficients to be >= 0 to ensure the parabola only opens upwards
+            coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[0.1, 0.1], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
             depth_fit = model(y_mm, *coeffs)
             fit_label = f"Quadratic fit (anchored at {nozzle_opening}mm)"
         except Exception:
             fit_type = "linear_constrained"
 
     if fit_type == "linear_constrained":
-        # Fits a line but forces the depth at y=0 to be exactly nozzle_width_mm
+        # Fits: depth = slope * y + nozzle_opening
         def model(y, slope):
             return slope * y + nozzle_opening
 
-        coeffs, _ = curve_fit(model, y_fit, d_fit)
-        depth_fit = model(y_mm, *coeffs)
-        fit_label = f"Linear fit (anchored at {nozzle_opening}mm)"
+        try:
+            # Force slope to be positive
+            coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[0.1], bounds=([0], [np.inf]), maxfev=5000)
+            depth_fit = model(y_mm, *coeffs)
+            fit_label = f"Linear fit (anchored at {nozzle_opening}mm)"
+        except Exception:
+            fit_type = "unconstrained"
 
-    elif fit_type == "unconstrained":
+    if fit_type == "unconstrained":
         # Old method: simple linear fit, ignoring nozzle width
         coeffs = np.polyfit(y_fit, d_fit, 1)
         depth_fit = (coeffs[0] * y_mm) + coeffs[1]
         fit_label = "Unconstrained linear fit"
+
+    # Failsafe: if all fits somehow fail, fall back to a flat line
+    if depth_fit is None:
+        depth_fit = np.full_like(y_mm, nozzle_opening)
+        fit_label = "Failed fit (fallback to constant)"
 
     # Safety catch: gas jet cannot be narrower than the physical nozzle itself
     depth_fit = np.maximum(depth_fit, nozzle_opening)
 
     debug = {
         "px_mm": px_to_mm,
-        "nozzle_width_mm": nozzle_opening,
+        "nozzle_opening_mm": nozzle_opening,
         "exclude_y_mm": exclude_y_mm,
     }
 
@@ -232,7 +273,7 @@ def estimate_depth_profile(
         ax.axhline(exclude_y_mm, linestyle="--", color="red", alpha=0.5, label="Exclusion Zone Boundary")
 
         # Mark the physical nozzle width
-        ax.plot(nozzle_opening, 0, 'r*', markersize=12, label="Physical Nozzle Width")
+        ax.plot(nozzle_opening, 0, 'r*', markersize=12, label="Physical Nozzle Opening")
 
         ax.set_xlabel("Depth (mm)")
         ax.set_ylabel("Height above nozzle (mm)")
@@ -242,7 +283,6 @@ def estimate_depth_profile(
         plt.show()
 
     return y_mm, depth_fit, debug
-
 
 def phase_to_density(
         phi_cropped: np.ndarray,
