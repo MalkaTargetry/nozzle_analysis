@@ -1951,7 +1951,7 @@ class SlitNozzleAnalysis:
             "perp_path": str,
             "para_path": str,
             "y_mm": np.ndarray,          # cropped y grid (mm)
-            "x_mm": np.ndarray,          # x grid (mm)
+            "r_mm": np.ndarray,          # x grid (mm)
             "depth_mm": np.ndarray,      # depth interpolated onto perp y grid (mm), cropped
             "density_map": np.ndarray,   # number density (m^-3) [or whatever your K implies]
             "meta": dict,
@@ -2141,7 +2141,7 @@ class SlitNozzleAnalysis:
                 "perp_path": str(perp_e.path),
                 "para_path": str(para_e.path),
                 "y_mm": y_perp_mm,
-                "x_mm": x_perp_mm,
+                "r_mm": x_perp_mm,
                 "depth_mm": depth_mm,
                 "density_map": n_cm3,
                 "meta": meta,
@@ -2156,7 +2156,7 @@ class SlitNozzleAnalysis:
 
                 # --- save full density map --------------------------------------------
                 np.save(out_d / "density_map.npy", n_cm3)
-                np.save(out_d / "x_mm.npy", x_perp_mm)
+                np.save(out_d / "r_mm.npy", x_perp_mm)
                 np.save(out_d / "y_mm.npy", y_perp_mm)
 
                 # --- extract & save profile at y_profile_mm ----------------------------
@@ -2269,7 +2269,7 @@ class SlitNozzleAnalysis:
         if r is None:
             raise KeyError(f"No density result found for delay={delay} (tol={tol})")
 
-        x = np.asarray(r["x_mm"], dtype=np.float64)
+        x = np.asarray(r["r_mm"], dtype=np.float64)
         y = np.asarray(r["y_mm"], dtype=np.float64)
         nmap = np.asarray(r["density_map"], dtype=np.float64)
 
@@ -2806,7 +2806,7 @@ class CylindricalNozzleAnalysis:
                 "delay": float,
                 "path": str,
                 "y_mm": np.ndarray,
-                "x_mm": np.ndarray,
+                "r_mm": np.ndarray,
                 "phase_map": np.ndarray,
                 "density_map": np.ndarray,
                 "meta": dict,
@@ -2894,7 +2894,7 @@ class CylindricalNozzleAnalysis:
             "delay": float(entry.delay),
             "path": str(entry.path),
             "y_mm": y_mm_full,
-            "x_mm": x_mm,
+            "r_mm": x_mm,
             "phase_map": phase_map_proc,
             "density_map": n_cm3,
             "y_profiles_mm": y_profiles_mm,
@@ -2922,7 +2922,7 @@ class CylindricalNozzleAnalysis:
             
             np.save(out_d / "density_map.npy", n_cm3)
             np.save(out_d / "phase_map.npy", phase_map_proc)
-            np.save(out_d / "x_mm.npy", x_mm)
+            np.save(out_d / "r_mm.npy", x_mm)
             np.save(out_d / "y_mm.npy", y_mm_full)
 
             # Extract and save profiles
@@ -3197,7 +3197,7 @@ class CylindricalNozzleAnalysis:
         # Extract result data
         delay_val = result["delay"]
         y_mm = result["y_mm"]
-        x_mm = result["x_mm"]
+        x_mm = result["r_mm"]
         density_map = result["density_map"]
         
         # Print density statistics
@@ -3282,7 +3282,7 @@ def plot_density_from_saved(
     
     Expected files in delay_folder:
         - density_map.npy: 2D density array in cm⁻³
-        - x_mm.npy: x (radial) coordinates in mm
+        - r_mm.npy: x (radial) coordinates in mm
         - y_mm.npy: y (axial) coordinates in mm
         - meta.npy (optional): metadata dictionary
     
@@ -3293,7 +3293,7 @@ def plot_density_from_saved(
         show: Whether to call plt.show()
         
     Returns:
-        fig, ax, density_map, x_mm, y_mm, title
+        fig, ax, density_map, r_mm, y_mm, title
     """
     # Prompt for folder if not provided
     if delay_folder is None or str(delay_folder).strip() == "":
@@ -3309,14 +3309,14 @@ def plot_density_from_saved(
     
     # Load saved arrays
     density_path = delay_folder / "density_map.npy"
-    x_path = delay_folder / "x_mm.npy"
+    x_path = delay_folder / "r_mm.npy"
     y_path = delay_folder / "y_mm.npy"
     meta_path = delay_folder / "meta.npy"
     
     if not density_path.exists():
         raise FileNotFoundError(f"density_map.npy not found in {delay_folder}")
     if not x_path.exists():
-        raise FileNotFoundError(f"x_mm.npy not found in {delay_folder}")
+        raise FileNotFoundError(f"r_mm.npy not found in {delay_folder}")
     if not y_path.exists():
         raise FileNotFoundError(f"y_mm.npy not found in {delay_folder}")
     
@@ -3564,7 +3564,7 @@ def plot_profiles_from_saved_runs(
 ):
     """
     Scan `root_dir` for run subfolders (e.g., 'Ar-5bar'), look for `delay_dir_name` in each,
-    load `profile_y*.npy` and `x_mm.npy` (with sensible fallbacks) and plot all profiles on one
+    load `profile_y*.npy` and `r_mm.npy` (with sensible fallbacks) and plot all profiles on one
     matplotlib figure.
 
     Parameters:
@@ -3642,8 +3642,8 @@ def plot_profiles_from_saved_runs(
         if not chosen_profiles:
             continue
 
-        # load x_mm if available else try to infer from meta or profile length
-        x_path = delay_dir / "x_mm.npy"
+        # load r_mm if available else try to infer from meta or profile length
+        x_path = delay_dir / "r_mm.npy"
         x_arr = None
         if x_path.exists():
             try:
@@ -3720,11 +3720,11 @@ def extract_and_save_profile(
     Load a saved density map and extract a profile at a specific y value.
     
     Parameters:
-      folder: path to the delay folder containing density_map.npy, x_mm.npy, y_mm.npy, meta.npy
+      folder: path to the delay folder containing density_map.npy, r_mm.npy, y_mm.npy, meta.npy
       y_mm: desired y position in mm; if None, user is prompted
     
     Returns:
-      tuple: (profile, x_mm, y_target, folder_path) or None if cancelled
+      tuple: (profile, r_mm, y_target, folder_path) or None if cancelled
     
     Saves the profile as profile_y{value}.npy in the folder.
     """
@@ -3745,7 +3745,7 @@ def extract_and_save_profile(
     folder = Path(folder)
     
     # Check required files
-    required_files = ["density_map.npy", "x_mm.npy", "y_mm.npy", "meta.npy"]
+    required_files = ["density_map.npy", "r_mm.npy", "y_mm.npy", "meta.npy"]
     for fname in required_files:
         fpath = folder / fname
         if not fpath.exists():
@@ -3755,7 +3755,7 @@ def extract_and_save_profile(
     # Load the data
     try:
         density_map = np.load(folder / "density_map.npy")
-        x_mm_arr = np.load(folder / "x_mm.npy")
+        x_mm_arr = np.load(folder / "r_mm.npy")
         y_mm_arr = np.load(folder / "y_mm.npy")
     except Exception as e:
         print(f"Error loading files: {e}")

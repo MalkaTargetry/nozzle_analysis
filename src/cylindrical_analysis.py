@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
-
+import matplotlib.ticker as ticker
 
 # =============================================================================
 # Physical Constants & Gas Definitions
@@ -35,57 +35,69 @@ GAS_PROPERTIES: Dict[str, Dict[str, float]] = {
 
 def crop_and_format_phase_map(
     phase_map: np.ndarray,
-    nozzle_edge_y: int,
-    px_to_mm : float,
+    nozzle_edge_y: Optional[int] = None,
+    px_to_mm: float = 1.0,
     max_height_mm: float = 6.0,
+    x_left: Optional[int] = None,
+    x_right: Optional[int] = None,
     nozzle_row: str = "last",
+    roi_width_mm: Optional[float] = None,
 ) -> np.ndarray:
     """
-    Crop the phase map to the region of interest above the nozzle and orient it
-    so that row index 0 corresponds to the physical nozzle exit.
-
-    Parameters
-    ----------
-    phase_map : np.ndarray
-        2D calibrated phase map array.
-    nozzle_edge_y : int, optional
-        Y-pixel index of the nozzle exit edge (e.g., from calib.estimate_nozzle_edge).
-    px_to_mm : float
-        Spatial scaling factor in mm per pixel.
-    max_height_mm : float
-        Maximum height above the nozzle to retain in mm (default: 6.0 mm).
-    nozzle_row : str
-        'last' if nozzle exit is at higher row index (jet flows upwards in image),
-        'first' if nozzle exit is at lower row index (jet flows downwards).
+    Crop the phase map vertically above the nozzle exit (row 0 = nozzle exit)
+    and horizontally so that the nozzle center ((x_left + x_right) / 2) is at
+    the exact center of the resulting array.
 
     Returns
     -------
     np.ndarray
-        Cropped 2D phase map oriented with row 0 at the nozzle exit edge.
+        Cropped 2D phase map oriented with row 0 at the nozzle edge and the
+        horizontal axis centered on the nozzle axis.
     """
     arr = np.asarray(phase_map)
     if arr.ndim != 2:
         raise ValueError(f"Expected 2D phase map, got shape {arr.shape}")
 
-    h, _ = arr.shape
+    h, w = arr.shape
     max_height_px = int(round(max_height_mm / px_to_mm)) if px_to_mm > 0 else h
 
+    # 1. Vertical crop & orientation (row 0 = nozzle exit)
     if nozzle_edge_y is not None:
         edge = int(nozzle_edge_y)
         if nozzle_row == "last":
             y_start = max(0, edge - max_height_px)
             cropped = arr[y_start:edge, :]
-            return np.flipud(cropped)
+            proc = np.flipud(cropped)
         elif nozzle_row == "first":
             y_end = min(h, edge + max_height_px)
-            return arr[edge:y_end, :]
+            proc = arr[edge:y_end, :]
         else:
             raise ValueError("nozzle_row must be 'first' or 'last'")
     else:
-        proc = np.flipud(arr) if nozzle_row == "last" else arr
-        return proc[:max_height_px, :]
+        proc = np.flipud(arr) if nozzle_row == "last" else arr.copy()
+        proc = proc[:max_height_px, :]
 
+    # 2. Horizontal symmetric crop around nozzle center
+    if x_left is not None and x_right is not None:
+        xl = int(min(x_left, x_right))
+        xr = int(max(x_left, x_right))
+        center_x = int(round(0.5 * (xl + xr)))
 
+        # Largest symmetric half-width available without going out of image bounds
+        max_half_w = min(center_x, w - 1 - center_x)
+
+        if roi_width_mm is not None and px_to_mm > 0:
+            target_half_w = int(round(0.5 * (roi_width_mm / px_to_mm)))
+            half_w = min(target_half_w, max_half_w)
+        else:
+            half_w = max_half_w
+
+        # Slice symmetrically (odd length 2*half_w + 1 ensures center_x is at slice_width // 2)
+        x_start = center_x - half_w
+        x_end = center_x + half_w + 1
+        proc = proc[:, x_start:x_end]
+
+    return proc
 # =============================================================================
 # 2. Abel Inversion Core
 # =============================================================================
@@ -122,7 +134,7 @@ def abel_inversion_1d(line: np.ndarray, px_to_mm: float) -> np.ndarray:
     dF_ds[-1] = (line[-1] - line[-2]) / px_to_mm
     dF_ds[1:-1] = (line[2:] - line[:-2]) / (2.0 * px_to_mm)
 
-    trapz_fn = getattr(np, "trapezoid", np.trapz)
+    trapz_fn = getattr(np, "trapezoid", np.trapezoid)
 
     for r in range(n - 1):
         r_mm = float(r) * px_to_mm
@@ -149,31 +161,16 @@ def abel_invert_phase_map(
     jump_thr: float = 1.6 * np.pi,
 ) -> np.ndarray:
     """
-    Apply row-by-row Abel inversion across an axisymmetric 2D phase map.
+    Apply row-by-row Abel inversion across an axisymmetric 2D phase map,
+    returning one radial half: f(y, r).
 
-    Symmetry strategy:
-    1. Splits each horizontal row at center_x into left and right radial halves.
-    2. Averages both halves to leverage symmetry and reduce experimental noise.
-    3. Inverts the radial line via Abel transformation.
-    4. Mirrors the inverted result across the center to reconstruct the 2D field.
-
-    Parameters
-    ----------
-    phase_map : np.ndarray
-        2D phase map array where axis 0 is height (y) and axis 1 is radial (x).
-    px_to_mm : float
-        Spatial resolution in mm per pixel.
-    center_x : int or float, optional
-        X-pixel index of the jet symmetry axis. Defaults to width // 2.
-    unwrap_rows : bool
-        Whether to check and unwrap residual 2pi phase jumps across rows.
-    jump_thr : float
-        Threshold for detecting phase wrap jumps in a row.
+    Column 0 represents the jet symmetry axis (r = 0), and columns increase
+    outwards along radius r.
 
     Returns
     -------
     np.ndarray
-        Abel-inverted 2D array of the same shape (units: rad/mm).
+        Abel-inverted 2D array of shape (height, n_radial) in units of rad/mm.
     """
     arr = np.asarray(phase_map, dtype=np.float64)
     if arr.ndim != 2:
@@ -181,7 +178,13 @@ def abel_invert_phase_map(
 
     h, w = arr.shape
     center = int(round(center_x)) if center_x is not None else w // 2
-    inverted_total = np.zeros((h, w), dtype=np.float64)
+
+    # Number of radial points available from the center outward
+    n_radial = min(center + 1, w - center)
+    if n_radial <= 0:
+        raise ValueError("Invalid center_x: outside the bounds of the phase map.")
+
+    inverted_radial = np.zeros((h, n_radial), dtype=np.float64)
 
     for i in range(h):
         row = arr[i, :].copy()
@@ -191,16 +194,10 @@ def abel_invert_phase_map(
             if np.any(np.abs(d) > float(jump_thr)):
                 row = np.unwrap(row)
 
-        left_radial = row[: center + 1][::-1]
-        right_radial = row[center:]
+        left_radial = row[: center + 1][::-1][:n_radial]
+        right_radial = row[center:][:n_radial]
 
-        n_radial = min(len(left_radial), len(right_radial))
-        if n_radial <= 0:
-            continue
-
-        left_radial = left_radial[:n_radial]
-        right_radial = right_radial[:n_radial]
-
+        # Symmetrized radial profile starting at r = 0
         radial_line = 0.5 * (left_radial + right_radial)
 
         if n_radial > 1:
@@ -208,17 +205,14 @@ def abel_invert_phase_map(
         else:
             inv_rad = radial_line.copy()
 
-        # Reconstruct full row with mirror symmetry
-        inverted_total[i, center - n_radial + 1 : center + 1] = inv_rad[::-1]
-        inverted_total[i, center : center + n_radial] = inv_rad
+        inverted_radial[i, :] = inv_rad
 
-    return inverted_total.astype(np.float32)
+    return inverted_radial.astype(np.float32)
 
 
 # =============================================================================
 # 3. Density Conversion (Gladstone-Dale)
 # =============================================================================
-
 def phase_to_density(
     phase_map: np.ndarray,
     px_to_mm: float,
@@ -229,36 +223,7 @@ def phase_to_density(
     clip_negative: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Convert an axisymmetric phase map to number density (cm^-3).
-
-    Performs Abel inversion (if not already performed) and converts radial
-    refractivity to mass density via Gladstone-Dale, then to number density.
-
-    Parameters
-    ----------
-    phase_map : np.ndarray
-        2D phase map oriented with row 0 at the nozzle edge.
-    px_to_mm : float
-        Pixel scaling factor in mm/pixel.
-    gas : str
-        Gas species ('argon' or 'helium').
-    wavelength_m : float
-        Laser wavelength in meters (default: 532 nm).
-    center_x : int or float, optional
-        Horizontal center index for the symmetry axis.
-    is_inverted : bool
-        Set to True if phase_map has already undergone Abel inversion.
-    clip_negative : bool
-        Clip non-physical negative density values to 0.
-
-    Returns
-    -------
-    density_map : np.ndarray
-        2D array of number densities in cm^-3.
-    x_mm : np.ndarray
-        1D horizontal spatial axis in mm.
-    y_mm : np.ndarray
-        1D vertical spatial axis in mm (0 = nozzle exit edge).
+    Convert an axisymmetric phase map to number density n(y, r) [cm^-3].
     """
     gas_key = gas.lower()
     if gas_key not in GAS_PROPERTIES:
@@ -270,7 +235,6 @@ def phase_to_density(
     m_mol = GAS_PROPERTIES[gas_key]["M"]
 
     phase_arr = np.asarray(phase_map)
-    h, w = phase_arr.shape
 
     if is_inverted:
         phase_inv = phase_arr.astype(np.float64)
@@ -291,11 +255,12 @@ def phase_to_density(
     if clip_negative:
         density_cm3 = np.maximum(density_cm3, 0.0)
 
-    y_mm = np.arange(h, dtype=np.float32) * px_to_mm
-    x_mm = np.arange(w, dtype=np.float32) * px_to_mm
+    # Build axes directly from the inverted density map dimensions
+    h_out, w_out = density_cm3.shape
+    y_mm = np.arange(h_out, dtype=np.float32) * px_to_mm
+    r_mm = np.arange(w_out, dtype=np.float32) * px_to_mm
 
-    return density_cm3, x_mm, y_mm
-
+    return density_cm3, r_mm, y_mm
 
 def extract_radial_profile(
     density_map: np.ndarray,
@@ -314,7 +279,7 @@ def extract_radial_profile(
 
 def plot_density_map(
     density_map: np.ndarray,
-    x_mm: np.ndarray,
+    r_mm: np.ndarray,
     y_mm: np.ndarray,
     title: str = "Cylindrical Nozzle Density Map",
     robust_pct: float = 98.0,
@@ -328,7 +293,7 @@ def plot_density_map(
 
     vmax = float(np.nanpercentile(density_map, robust_pct))
     vmax = max(vmax, 1e-12)
-    extent = [float(x_mm[0]), float(x_mm[-1]), float(y_mm[0]), float(y_mm[-1])]
+    extent = [float(r_mm[0]), float(r_mm[-1]), float(y_mm[0]), float(y_mm[-1])]
 
     im = ax.imshow(
         density_map,
@@ -351,7 +316,7 @@ def plot_density_map(
         ax.legend(loc="upper right")
 
     ax.set_title(title, color="black", fontsize=13)
-    ax.set_xlabel("x (mm)", color="black", fontsize=11)
+    ax.set_xlabel("r (mm)", color="black", fontsize=11)
     ax.set_ylabel("Height above nozzle y (mm)", color="black", fontsize=11)
     ax.tick_params(colors="black")
 
@@ -360,15 +325,24 @@ def plot_density_map(
     cbar.ax.yaxis.set_tick_params(color="black")
     plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="black")
 
-    if show:
-        plt.show()
+    # 1. Force scientific notation (e.g. x 10^18)
+    formatter = ticker.ScalarFormatter(useMathText=True)
+    formatter.set_scientific(True)
+    formatter.set_powerlimits((0, 0))
+    cbar.ax.yaxis.set_major_formatter(formatter)
 
-    return fig, ax
+    # 2. Force tick marks, numbers, and the scientific multiplier to black
+    cbar.ax.yaxis.set_tick_params(color="black")
+    cbar.ax.yaxis.get_offset_text().set_color("black")
+    cbar.ax.yaxis.get_offset_text().set_fontsize(11)
+
+    plt.show()
+
 
 
 def plot_radial_profiles(
     density_map: np.ndarray,
-    x_mm: np.ndarray,
+    r_mm: np.ndarray,
     y_mm: np.ndarray,
     y_targets_mm: List[float],
     title: str = "Radial Density Profiles",
@@ -379,19 +353,17 @@ def plot_radial_profiles(
     ax.set_facecolor("white")
 
     for y_tgt in y_targets_mm:
-        _, prof, actual_y = extract_radial_profile(density_map, y_mm, x_mm, y_tgt)
-        ax.plot(x_mm, prof, linewidth=1.8, label=f"y = {actual_y:.2f} mm")
+        _, prof, actual_y = extract_radial_profile(density_map, y_mm, r_mm, y_tgt)
+        ax.plot(r_mm, prof, linewidth=1.8, label=f"y = {actual_y:.2f} mm")
 
     ax.set_title(title, color="black", fontsize=13)
-    ax.set_xlabel("x (mm)", color="black", fontsize=11)
+    ax.set_xlabel("r (mm)", color="black", fontsize=11)
     ax.set_ylabel("Number Density (cm$^{-3}$)", color="black", fontsize=11)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best", fontsize=10)
     ax.tick_params(colors="black")
 
-    if show:
-        plt.show()
+    plt.show()
 
-    return fig, ax
 
 
