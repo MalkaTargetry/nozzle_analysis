@@ -43,7 +43,7 @@ def estimate_depth_profile(
         bg_frac: float = 0.10,
         exclude_y_mm: float = 0.4,
         fit_type: str = "log_constrained",
-        # Options: "log_constrained", "power_constrained", "quadratic_constrained", "linear_constrained"
+        plot_gaussian_y_mm: Optional[float] = None,  # Specified height (mm) to inspect
         debug_y_mm: Optional[float] = None,
         debug_row_idx: Optional[int] = None,
         debug_title: Optional[str] = None,
@@ -74,13 +74,15 @@ def estimate_depth_profile(
     left_bg = slice(0, n_bg)
     right_bg = slice(w - n_bg, w)
 
-    dbg_i: Optional[int] = None
+    target_plot_y = plot_gaussian_y_mm if plot_gaussian_y_mm is not None else debug_y_mm
+    target_i: Optional[int] = None
     if debug_row_idx is not None:
-        dbg_i = int(debug_row_idx)
-    elif debug_y_mm is not None:
-        dbg_i = int(np.clip(round(float(debug_y_mm) / px_to_mm), 0, h - 1))
+        target_i = int(np.clip(debug_row_idx, 0, h - 1))
+    elif target_plot_y is not None:
+        target_i = int(np.clip(round(float(target_plot_y) / px_to_mm), 0, h - 1))
 
-    debug_row = {}
+    gaussian_debug_data: Dict[str, Any] = {}
+
     if unwrap_rows:
         sig_unwrapped = np.unwrap(sig)
 
@@ -141,7 +143,7 @@ def estimate_depth_profile(
             depth_mm[i] = (r - l + 1) * px_to_mm
         else:
             def gaussian_1d(x, amplitude, mean, sigma):
-                return amplitude * np.exp(-((x - mean) ** 2) / (2 * sigma ** 2))
+                return amplitude * np.exp(-((x - mean) ** 2) / (2.0 * sigma ** 2))
 
             try:
                 x_indices = np.arange(w, dtype=np.float32)
@@ -168,6 +170,19 @@ def estimate_depth_profile(
                 gaussian_integral = float(sigma) * np.sqrt(2.0 * np.pi)
                 depth_mm[i] = gaussian_integral * px_to_mm
 
+                if target_i is not None and i == target_i:
+                    gaussian_debug_data = {
+                        "row_idx": i,
+                        "y_mm": float(y_loc),
+                        "x_indices": x_indices,
+                        "row_fit": row0_for_fit,
+                        "amplitude": float(amplitude),
+                        "mean": float(mean),
+                        "sigma": float(sigma),
+                        "depth_mm": float(depth_mm[i]),
+                        "success": True,
+                    }
+
             except Exception as e:
                 l, r = imax, imax
                 while l > 0 and mask[l]: l -= 1
@@ -177,12 +192,77 @@ def estimate_depth_profile(
                 depth_mm[i] = (r - l + 1) * px_to_mm
 
     # =========================================================================
-    # NEW: CONSTRAINED FITTING MODELS
+    # PLOT SPECIFIED GAUSSIAN FIT
+    # =========================================================================
+    should_plot_gaussian = (plot_gaussian_y_mm is not None) or (debug_show and target_i is not None)
+
+    if should_plot_gaussian and gaussian_debug_data.get("success", False):
+        y_val = gaussian_debug_data["y_mm"]
+        amp = gaussian_debug_data["amplitude"]
+        mean_px = gaussian_debug_data["mean"]
+        sigma_px = gaussian_debug_data["sigma"]
+        depth_val = gaussian_debug_data["depth_mm"]
+
+        x_px = gaussian_debug_data["x_indices"]
+        x_mm = x_px * px_to_mm
+        row_fit = gaussian_debug_data["row_fit"]
+        sigma_mm = sigma_px * px_to_mm
+
+        x_fine_px = np.linspace(0, w - 1, 600)
+        x_fine_mm = x_fine_px * px_to_mm
+        y_fine = amp * np.exp(-((x_fine_px - mean_px) ** 2) / (2.0 * sigma_px ** 2))
+
+        fig_g, ax_g = plt.subplots(figsize=(8.5, 5.2), facecolor="white", constrained_layout=True)
+        ax_g.set_facecolor("white")
+
+        # 1. Measured data points
+        ax_g.plot(x_mm, row_fit, "o", color="#1f77b4", markersize=3.5, alpha=0.45, label=r"Measured Phase $\Delta\phi(x)$")
+
+        # 2. Continuous Gaussian fit
+        ax_g.plot(x_fine_mm, y_fine, "-r", linewidth=2.2, label=rf"Gaussian Fit")
+
+        # 3. Shaded integral for thickness
+        ax_g.fill_between(x_fine_mm, 0, y_fine, color="red", alpha=0.12, label=r"Integrated Thickness $\int G(x)dx$")
+
+        # 4. Info box with forced black text
+        method_text = (
+            f"Height above nozzle: {y_val:.2f} [mm]\n"
+            f"Peak Phase $A$: {amp:.2f} [rad]\n"
+            f"Gaussian width $\\sigma$: {sigma_mm:.3f} [mm]\n"
+            f"Effective Depth $d = \\sigma\\sqrt{{2\\pi}}$: {depth_val:.2f} [mm]"
+        )
+        ax_g.text(
+            0.03, 0.95, method_text,
+            transform=ax_g.transAxes,
+            fontsize=11,
+            color="black",  # Explicit black text prevents invisible dark mode text
+            verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="#f8f9fa", edgecolor="#cccccc", alpha=0.95)
+        )
+
+        # 5. Format axes, ticks, and spines in black
+        # ttl = debug_title or f"Transverse Phase Profile & Gaussian Fit at $y = {y_val:.2f}$ mm"
+        # ax_g.set_title(ttl, fontsize=13, fontweight="bold", color="black", pad=12)
+        ax_g.set_xlabel("Transverse Position $x$ [mm]", fontsize=12, color="black")
+        ax_g.set_ylabel(r"Phase Shift $\Delta\phi$ [rad]", fontsize=12, color="black")
+        ax_g.tick_params(colors="black", labelsize=10)
+        for spine in ax_g.spines.values():
+            spine.set_color("black")
+            spine.set_linewidth(1.2)
+        ax_g.grid(True, linestyle=":", alpha=0.5, color="gray")
+
+        legend = ax_g.legend(loc="upper right", fontsize=10, facecolor="white", edgecolor="#cccccc", framealpha=0.95)
+        for t in legend.get_texts():
+            t.set_color("black")
+
+        plt.show()
+
+    # =========================================================================
+    # CONSTRAINED FITTING MODELS
     # =========================================================================
     valid_mask = np.isfinite(depth_mm) & (depth_mm > 0) & (y_mm > exclude_y_mm)
 
     if np.sum(valid_mask) < 3:
-        print(f"Warning: Not enough valid points above {exclude_y_mm}mm to fit depth.")
         valid_mask = np.isfinite(depth_mm) & (depth_mm > 0)
 
     y_fit = y_mm[valid_mask]
@@ -192,40 +272,29 @@ def estimate_depth_profile(
     fit_label = ""
 
     if fit_type == "log_constrained":
-        # Fits: depth = a * ln(1 + b * y) + nozzle_opening
         def model(y, a, b):
             return a * np.log1p(b * y) + nozzle_opening
-
         try:
-            # Force a and b to be positive so the log behaves correctly and expansion only grows
             coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[1.0, 1.0], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
             depth_fit = model(y_mm, *coeffs)
             fit_label = f"Log fit (anchored at {nozzle_opening}mm)"
-        except Exception as e:
-            print(f"Log fit failed ({e}), falling back to quadratic.")
+        except Exception:
             fit_type = "quadratic_constrained"
 
     if fit_type == "power_constrained":
-        # Fits: depth = a * y^b + nozzle_opening
         def model(y, a, b):
             return a * (y ** b) + nozzle_opening
-
         try:
-            # Force positive expansion
             coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[1.0, 0.5], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
             depth_fit = model(y_mm, *coeffs)
             fit_label = f"Power fit (anchored at {nozzle_opening}mm)"
-        except Exception as e:
-            print(f"Power fit failed ({e}), falling back to quadratic.")
+        except Exception:
             fit_type = "quadratic_constrained"
 
     if fit_type == "quadratic_constrained":
-        # Fits: depth = a * y^2 + b * y + nozzle_opening
         def model(y, a, b):
             return a * (y ** 2) + b * y + nozzle_opening
-
         try:
-            # Force coefficients to be >= 0 to ensure the parabola only opens upwards
             coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[0.1, 0.1], bounds=([0, 0], [np.inf, np.inf]), maxfev=5000)
             depth_fit = model(y_mm, *coeffs)
             fit_label = f"Quadratic fit (anchored at {nozzle_opening}mm)"
@@ -233,12 +302,9 @@ def estimate_depth_profile(
             fit_type = "linear_constrained"
 
     if fit_type == "linear_constrained":
-        # Fits: depth = slope * y + nozzle_opening
         def model(y, slope):
             return slope * y + nozzle_opening
-
         try:
-            # Force slope to be positive
             coeffs, _ = curve_fit(model, y_fit, d_fit, p0=[0.1], bounds=([0], [np.inf]), maxfev=5000)
             depth_fit = model(y_mm, *coeffs)
             fit_label = f"Linear fit (anchored at {nozzle_opening}mm)"
@@ -246,43 +312,44 @@ def estimate_depth_profile(
             fit_type = "unconstrained"
 
     if fit_type == "unconstrained":
-        # Old method: simple linear fit, ignoring nozzle width
         coeffs = np.polyfit(y_fit, d_fit, 1)
         depth_fit = (coeffs[0] * y_mm) + coeffs[1]
         fit_label = "Unconstrained linear fit"
 
-    # Failsafe: if all fits somehow fail, fall back to a flat line
     if depth_fit is None:
         depth_fit = np.full_like(y_mm, nozzle_opening)
         fit_label = "Failed fit (fallback to constant)"
 
-    # Safety catch: gas jet cannot be narrower than the physical nozzle itself
     depth_fit = np.maximum(depth_fit, nozzle_opening)
 
     debug = {
         "px_mm": px_to_mm,
         "nozzle_opening_mm": nozzle_opening,
         "exclude_y_mm": exclude_y_mm,
+        "gaussian_fit_data": gaussian_debug_data,
     }
 
     if debug_show:
-        fig, ax = plt.subplots(1, 1, figsize=(8, 5), constrained_layout=True)
-        ax.plot(depth_mm, y_mm, "o", color='lightgray', alpha=0.5, label="Raw depth estimates (noisy near nozzle)")
+        fig, ax = plt.subplots(1, 1, figsize=(8, 5), facecolor="white", constrained_layout=True)
+        ax.set_facecolor("white")
+        ax.plot(depth_mm, y_mm, "o", color='lightgray', alpha=0.5, label="Raw depth estimates")
         ax.plot(d_fit, y_fit, ".", color='blue', alpha=0.8, label=f"Valid points used for fit (>{exclude_y_mm}mm)")
         ax.plot(depth_fit, y_mm, "-k", linewidth=2, label=fit_label)
         ax.axhline(exclude_y_mm, linestyle="--", color="red", alpha=0.5, label="Exclusion Zone Boundary")
-
-        # Mark the physical nozzle width
         ax.plot(nozzle_opening, 0, 'r*', markersize=12, label="Physical Nozzle Opening")
 
-        ax.set_xlabel("Depth (mm)")
-        ax.set_ylabel("Height above nozzle (mm)")
-        ax.set_title("Gas Jet Depth Profile")
+        ax.set_xlabel("Depth (mm)", color="black", fontsize=11)
+        ax.set_ylabel("Height above nozzle (mm)", color="black", fontsize=11)
+        ax.set_title("Gas Jet Depth Profile", color="black", fontsize=12, fontweight="bold")
+        ax.tick_params(colors="black")
+        for spine in ax.spines.values():
+            spine.set_color("black")
         ax.legend(loc="best")
         ax.grid(True, alpha=0.3)
         plt.show()
 
     return y_mm, depth_fit, debug
+
 
 def phase_to_density(
         phi_cropped: np.ndarray,

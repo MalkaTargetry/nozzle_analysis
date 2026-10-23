@@ -130,7 +130,8 @@ def abel_inversion_1d(line: np.ndarray, px_to_mm: float) -> np.ndarray:
 
     # Central difference in physical space (rad/mm)
     dF_ds = np.zeros(n, dtype=np.float64)
-    dF_ds[0] = (line[1] - line[0]) / px_to_mm
+    # dF_ds[0] = (line[1] - line[0]) / px_to_mm
+    dF_ds[0] = 0.0
     dF_ds[-1] = (line[-1] - line[-2]) / px_to_mm
     dF_ds[1:-1] = (line[2:] - line[:-2]) / (2.0 * px_to_mm)
 
@@ -138,8 +139,9 @@ def abel_inversion_1d(line: np.ndarray, px_to_mm: float) -> np.ndarray:
 
     for r in range(n - 1):
         r_mm = float(r) * px_to_mm
-        s_indices = np.arange(r + 1, n, dtype=np.int32)
-        s_mm = s_indices.astype(np.float64) * px_to_mm
+        # Evaluate s at the mid-point of the pixel to avoid division by zero without losing the area
+        s_indices = np.arange(r, n - 1, dtype=np.int32)
+        s_mm = (s_indices.astype(np.float64) + 0.5) * px_to_mm  # Shift by 0.5 pixels
 
         s_squared = s_mm ** 2
         r_squared = r_mm ** 2
@@ -282,7 +284,7 @@ def plot_density_map(
     r_mm: np.ndarray,
     y_mm: np.ndarray,
     title: str = "Cylindrical Nozzle Density Map",
-    robust_pct: float = 98.0,
+    robust_pct: float = 99.5,
     y_profile_mm: Optional[float] = None,
     cmap: str = "viridis",
     show: bool = True,
