@@ -1,5 +1,3 @@
-from doctest import debug
-
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
@@ -132,7 +130,17 @@ def detect_nozzle_x_range(img, nozzle_edge_y: int,
             break
 
     if debug:
-        fig, ax = plt.subplots(2, 1, figsize=(10, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+        fig, ax = plt.subplots(
+            2, 1, figsize=(10, 8), sharex=True,
+            gridspec_kw={'height_ratios': [2, 1]},
+            facecolor='white'
+        )
+        # Force subplots background, spines, and ticks to black/white
+        for a in ax:
+            a.set_facecolor('white')
+            a.tick_params(colors='black', labelsize=10)
+            for spine in a.spines.values():
+                spine.set_color('black')
 
         # Panel 1: Image ROI with Edge & X-Range
         ax[0].imshow(img, cmap='gray', aspect='auto')
@@ -143,9 +151,11 @@ def detect_nozzle_x_range(img, nozzle_edge_y: int,
         if x_right is not None:
             ax[0].axvline(x_right, color='magenta', linestyle='--', linewidth=1.5,
                           label=f'x_right ({x_right}px)')
-        ax[0].set_title('ROI Image with Nozzle Edge and X Range Detection')
-        ax[0].set_ylabel('y [px]')
-        ax[0].legend(loc='upper right')
+        ax[0].set_title('ROI Image with Nozzle Edge and X Range Detection', color='black', fontsize=12)
+        ax[0].set_ylabel('y [px]', color='black', fontsize=11)
+        leg0 = ax[0].legend(loc='upper right', facecolor='white', edgecolor='black', framealpha=0.9, fontsize=10)
+        for t in leg0.get_texts():
+            t.set_color('black')
 
         # Panel 2: 1D Fringe Energy Profile & Threshold
         ax[1].plot(profile, color='blue', label='Fringe Energy Profile')
@@ -154,10 +164,12 @@ def detect_nozzle_x_range(img, nozzle_edge_y: int,
             ax[1].axvline(x_left, color='cyan', linestyle='--')
         if x_right is not None:
             ax[1].axvline(x_right, color='magenta', linestyle='--')
-        ax[1].set_xlabel('x [px]')
-        ax[1].set_ylabel('Fringe Energy')
-        ax[1].legend(loc='upper right')
-        ax[1].grid(True, alpha=0.3)
+        ax[1].set_xlabel('x [px]', color='black', fontsize=11)
+        ax[1].set_ylabel('Fringe Energy', color='black', fontsize=11)
+        ax[1].grid(True, alpha=0.3, color='gray')
+        leg1 = ax[1].legend(loc='upper right', facecolor='white', edgecolor='black', framealpha=0.9, fontsize=10)
+        for t in leg1.get_texts():
+            t.set_color('black')
 
         plt.tight_layout()
         plt.show()
@@ -257,14 +269,31 @@ def calibrate_phase(unwrapped_phase: np.ndarray, nozzle_edge_y: int, nozzle_left
             vcenter=0,
             vmax=limit
         )
-        plt.figure()
-        im = plt.imshow(
+        fig, ax = plt.subplots(figsize=(8, 6), facecolor='white')
+        ax.set_facecolor('white')
+
+        im = ax.imshow(
             calibrated_phase,
             cmap="seismic",
             norm=norm,
             aspect="auto"
         )
-        plt.colorbar(im, label = "Phase [rad]")
+        ax.set_title("Calibrated Phase Map", color="black", fontsize=13)
+        ax.set_xlabel("x [px]", color="black", fontsize=11)
+        ax.set_ylabel("y [px]", color="black", fontsize=11)
+        ax.tick_params(colors="black")
+        for spine in ax.spines.values():
+            spine.set_color("black")
+
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.set_label("Phase [rad]", color="black", fontsize=11)
+        cbar.ax.yaxis.set_tick_params(color="black")
+        plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="black")
+        cbar.ax.yaxis.get_offset_text().set_color("black")
+        for spine in cbar.ax.spines.values():
+            spine.set_color("black")
+
+        plt.tight_layout()
         plt.show()
 
     return calibrated_phase, debug_info
